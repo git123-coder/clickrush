@@ -13,7 +13,7 @@
  *   - For Day 2+ we can move to httpOnly cookies for improved XSS resistance.
  */
 
-import type { LoginPayload, SignupPayload, TokenResponse, User, StartGameResponse, FinishGameResponse } from '../types';
+import type { LoginPayload, SignupPayload, TokenResponse, User, StartGameResponse, FinishGameResponse, LeaderboardResponse, LeaderboardType, GameHistoryResponse, UserRankingsResponse } from '../types';
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
@@ -109,3 +109,30 @@ export async function finishGame(gameId: string, clicks: number): Promise<Finish
   );
 }
 
+// ── Leaderboard endpoints (public — no auth required) ────────────────────────
+
+export async function getLeaderboard(
+  type: LeaderboardType,
+  limit = 50,
+): Promise<LeaderboardResponse> {
+  return apiFetch<LeaderboardResponse>(
+    `/api/leaderboards/${type}?limit=${limit}`,
+  );
+}
+
+// ── Profile endpoints (authenticated) ───────────────────────────────────
+
+export async function getMyGames(
+  limit = 20,
+  offset = 0,
+): Promise<GameHistoryResponse> {
+  return apiFetch<GameHistoryResponse>(
+    `/api/users/me/games?limit=${limit}&offset=${offset}`,
+    {},
+    true,
+  );
+}
+
+export async function getMyRankings(): Promise<UserRankingsResponse> {
+  return apiFetch<UserRankingsResponse>('/api/users/me/rankings', {}, true);
+}

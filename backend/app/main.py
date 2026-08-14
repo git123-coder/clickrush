@@ -20,7 +20,7 @@ Why configure CORS here?
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, games, users
+from app.api.routes import auth, games, leaderboards, users
 from app.core.config import settings
 
 app = FastAPI(
@@ -44,6 +44,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api")
 app.include_router(users.router, prefix="/api")
 app.include_router(games.router, prefix="/api")
+app.include_router(leaderboards.router, prefix="/api")
 
 
 # ── Health check ─────────────────────────────────────────────────────────────

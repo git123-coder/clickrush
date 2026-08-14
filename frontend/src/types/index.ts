@@ -43,3 +43,39 @@ export interface FinishGameResponse {
   finished_at: string;
   status: 'active' | 'completed' | 'expired';
 }
+
+// ── Leaderboard types ─────────────────────────────────────────────────────────
+
+export type LeaderboardType = 'global' | 'daily' | 'weekly';
+
+export interface LeaderboardEntry {
+  rank: number;
+  username: string;
+  clicks: number;
+  achieved_at: string;
+}
+
+export interface LeaderboardResponse {
+  entries: LeaderboardEntry[];
+}
+
+// ── Profile types ─────────────────────────────────────────────────────────────
+
+export interface GameHistoryEntry {
+  game_id: string;
+  clicks: number;
+  started_at: string;
+  finished_at: string;
+}
+
+export interface GameHistoryResponse {
+  games: GameHistoryEntry[];
+  total: number;
+}
+
+export interface UserRankingsResponse {
+  personal_best: number | null;
+  global_rank: number | null;
+  daily_rank: number | null;
+  weekly_rank: number | null;
+}

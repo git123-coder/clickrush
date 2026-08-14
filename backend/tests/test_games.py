@@ -283,3 +283,78 @@ def test_day1_protected_endpoint_still_works(client, auth_headers, registered_us
     data = resp.json()
     assert data["username"] == registered_user["username"]
     assert "password_hash" not in data
+
+
+# ── Orphaned / abandoned session bug-fix regression tests ─────────────────────
+
+def test_abandoned_session_does_not_block_new_game(client, auth_headers, db_session):
+    """
+    Core bug regression: user starts a game, closes tab (session stays
+    status=active), returns and starts a new game.  The stale session must be
+    auto-expired and a 201 returned — not a permanent 409.
+    """
+    # Start a game
+    start_resp = start_game(client, auth_headers)
+    assert start_resp.status_code == 201
+    game_id = uuid.UUID(start_resp.json()["game_id"])
+
+    # Simulate "closed tab" by backdating the session past expires_at + grace
+    session = db_session.get(GameSession, game_id)
+    past = datetime.now(timezone.utc) - timedelta(
+        seconds=GAME_DURATION_SECONDS + GRACE_PERIOD_SECONDS + 5
+    )
+    session.started_at = past
+    session.expires_at = past + timedelta(seconds=GAME_DURATION_SECONDS)
+    # Leave status = active to reproduce the bug
+    db_session.commit()
+
+    # User logs back in and starts a new game — must succeed
+    new_resp = start_game(client, auth_headers)
+    assert new_resp.status_code == 201, (
+        f"Expected 201 but got {new_resp.status_code}: {new_resp.json()}"
+    )
+    assert new_resp.json()["game_id"] != str(game_id)
+
+    # The old session must have been flipped to expired
+    db_session.refresh(session)
+    assert session.status == GameStatus.expired
+
+
+def test_still_active_session_still_blocks_new_game(client, auth_headers):
+    """
+    The fix must NOT allow starting a second game while one is genuinely
+    still running (status=active, expires_at still in the future).
+    """
+    r1 = start_game(client, auth_headers)
+    assert r1.status_code == 201
+
+    r2 = start_game(client, auth_headers)
+    assert r2.status_code == 409
+    assert "active" in r2.json()["detail"].lower()
+
+
+def test_finish_abandoned_active_session_returns_410(client, auth_headers, db_session):
+    """
+    Finishing a session that is status=active but past its expires_at+grace
+    must return 410 (expired), not 200 or 409. Verifies that finish_game()
+    also uses is_session_truly_active() correctly.
+    """
+    game_id = uuid.UUID(start_game(client, auth_headers).json()["game_id"])
+
+    # Backdate the session
+    session = db_session.get(GameSession, game_id)
+    past = datetime.now(timezone.utc) - timedelta(
+        seconds=GAME_DURATION_SECONDS + GRACE_PERIOD_SECONDS + 5
+    )
+    session.started_at = past
+    session.expires_at = past + timedelta(seconds=GAME_DURATION_SECONDS)
+    # Leave status = active
+    db_session.commit()
+
+    resp = finish_game(client, str(game_id), 30, auth_headers)
+    assert resp.status_code == 410
+
+    # Session must now be marked expired in DB
+    db_session.refresh(session)
+    assert session.status == GameStatus.expired
+

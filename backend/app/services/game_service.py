@@ -36,23 +36,73 @@ from app.models.game_session import GAME_DURATION_SECONDS, GRACE_PERIOD_SECONDS,
 from app.models.score import MAX_CLICKS_PER_GAME, Score
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def is_session_truly_active(session: GameSession) -> bool:
+    """
+    Return True only if a session is BOTH marked active AND still within its
+    time window (i.e. expires_at + grace period has not passed).
+
+    Why this helper?
+      - status == active is necessary but not sufficient. A session can be
+        abandoned (user closes tab mid-game) and remain status=active in the
+        DB indefinitely. Checking expires_at as well gives the ground truth.
+      - Centralising this logic prevents divergence between start_game() and
+        finish_game() — both call this single function.
+    """
+    if session.status != GameStatus.active:
+        return False
+    now = datetime.now(timezone.utc)
+    deadline = session.expires_at + timedelta(seconds=GRACE_PERIOD_SECONDS)
+    return now <= deadline
+
+
+def _expire_stale_session(db: Session, session: GameSession) -> None:
+    """Mark a session expired and commit. Used as a side-effect in start_game."""
+    session.status = GameStatus.expired
+    db.commit()
+
+
 # ── Start ─────────────────────────────────────────────────────────────────────
 
 def get_active_session(db: Session, user_id: uuid.UUID) -> GameSession | None:
-    """Return the user's currently active GameSession, or None."""
-    return db.scalar(
+    """
+    Return the user's currently active GameSession only if it is still within
+    its time window, or None.
+
+    If a session is found with status=active but its expires_at has passed,
+    it is treated as abandoned: it is immediately marked expired so it no
+    longer blocks new games. This handles the logout-mid-game / closed-tab
+    scenario without any background job.
+    """
+    candidate = db.scalar(
         select(GameSession).where(
             GameSession.user_id == user_id,
             GameSession.status == GameStatus.active,
         )
     )
 
+    if candidate is None:
+        return None
+
+    if is_session_truly_active(candidate):
+        # Session is genuinely still running — block a new start.
+        return candidate
+
+    # Session is status=active but its time window has passed → abandoned.
+    # Auto-expire it so the user can start a new game.
+    _expire_stale_session(db, candidate)
+    return None
+
 
 def start_game(db: Session, user_id: uuid.UUID) -> GameSession:
     """
     Create a new game session for the user.
 
-    Rejects the request if the user already has an active session.
+    Rejects the request only if the user has an active session that is still
+    within its valid time window. Stale active sessions (past expires_at) are
+    automatically marked expired before creating the new one.
+
     Timestamps are set from the server clock — never from client input.
     """
     existing = get_active_session(db, user_id)
@@ -94,7 +144,9 @@ def finish_game(
     Validations (in order):
       1. Session must exist.
       2. Session must belong to the requesting user.
-      3. Session must be active (not already completed or expired).
+      3. Session must be active AND still within its time window.
+         A session with status=active but past expires_at is treated as
+         expired (uses is_session_truly_active helper).
       4. Session must not already have a score (double-submit protection).
       5. Clicks must be within the allowed range [0, MAX_CLICKS_PER_GAME].
       6. Current server time must be within the allowed window
@@ -116,10 +168,27 @@ def finish_game(
             detail="This game session does not belong to you.",
         )
 
-    if session.status != GameStatus.active:
+    # Check status first — catches completed/already-expired sessions quickly.
+    if session.status == GameStatus.completed:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Game session is already {session.status.value}.",
+            detail="Game session is already completed.",
+        )
+
+    if session.status == GameStatus.expired:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Game session has expired. Start a new game.",
+        )
+
+    # session.status == active here. Now verify the time window using the
+    # shared helper so abandoned sessions are caught consistently.
+    if not is_session_truly_active(session):
+        # status=active but past the deadline — treat as expired.
+        _expire_stale_session(db, session)
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Game session has expired. Start a new game.",
         )
 
     # Double-submit guard: check for existing score
@@ -144,29 +213,9 @@ def finish_game(
             detail=f"clicks exceeds the maximum allowed ({MAX_CLICKS_PER_GAME}).",
         )
 
-    # Timing validation — server is authoritative
-    now = datetime.now(timezone.utc)
-    deadline = session.expires_at + timedelta(seconds=GRACE_PERIOD_SECONDS)
-
-    if now < session.started_at:
-        # Should never happen, but guard against clock skew
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Submission received before game started.",
-        )
-
-    if now > deadline:
-        # Mark as expired so the user can start a new game
-        session.status = GameStatus.expired
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_410_GONE,
-            detail="Game session has expired. Start a new game.",
-        )
-
     # ── Persist ───────────────────────────────────────────────────────────────
-    finished_at = now
-    session.finished_at = finished_at
+    now = datetime.now(timezone.utc)
+    session.finished_at = now
     session.status = GameStatus.completed
 
     score = Score(
