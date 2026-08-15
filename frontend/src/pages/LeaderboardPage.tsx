@@ -120,45 +120,47 @@ export default function LeaderboardPage({ currentUsername, onBack }: Props) {
             </p>
           </div>
         ) : (
-          <table className="lb-table" role="table" aria-label={`${activeTabDef.label} leaderboard`}>
-            <thead>
-              <tr>
-                <th className="lb-th lb-th-rank">Rank</th>
-                <th className="lb-th lb-th-user">Player</th>
-                <th className="lb-th lb-th-clicks">Clicks</th>
-                <th className="lb-th lb-th-date">Achieved</th>
-              </tr>
-            </thead>
-            <tbody>
-              {entries.map(entry => {
-                const isMe = !!currentUsername &&
-                  entry.username.toLowerCase() === currentUsername.toLowerCase();
-                return (
-                  <tr
-                    key={`${entry.rank}-${entry.username}`}
-                    className={`lb-row${isMe ? ' lb-row-mine' : ''}`}
-                    aria-label={isMe ? 'Your entry' : undefined}
-                  >
-                    <td className="lb-td lb-td-rank">
-                      <RankBadge rank={entry.rank} />
-                    </td>
-                    <td className="lb-td lb-td-user">
-                      <span className="lb-username">
-                        {isMe ? '⚡ ' : ''}{entry.username}
-                      </span>
-                      {isMe && <span className="lb-you-badge">You</span>}
-                    </td>
-                    <td className="lb-td lb-td-clicks">
-                      <span className="lb-clicks">{entry.clicks.toLocaleString()}</span>
-                    </td>
-                    <td className="lb-td lb-td-date">
-                      <span className="lb-date">{formatDate(entry.achieved_at)}</span>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <div className="table-container">
+            <table className="lb-table" role="table" aria-label={`${activeTabDef.label} leaderboard`}>
+              <thead>
+                <tr>
+                  <th className="lb-th lb-th-rank">Rank</th>
+                  <th className="lb-th lb-th-user">Player</th>
+                  <th className="lb-th lb-th-clicks">Clicks</th>
+                  <th className="lb-th lb-th-date">Achieved</th>
+                </tr>
+              </thead>
+              <tbody>
+                {entries.map(entry => {
+                  const isMe = !!currentUsername &&
+                    entry.username.toLowerCase() === currentUsername.toLowerCase();
+                  return (
+                    <tr
+                      key={`${entry.rank}-${entry.username}`}
+                      className={`lb-row${isMe ? ' lb-row-mine' : ''}`}
+                      aria-label={isMe ? 'Your entry' : undefined}
+                    >
+                      <td className="lb-td lb-td-rank">
+                        <RankBadge rank={entry.rank} />
+                      </td>
+                      <td className="lb-td lb-td-user">
+                        <span className="lb-username">
+                          {isMe ? '⚡ ' : ''}{entry.username}
+                        </span>
+                        {isMe && <span className="lb-you-badge">You</span>}
+                      </td>
+                      <td className="lb-td lb-td-clicks">
+                        <span className="lb-clicks">{entry.clicks.toLocaleString()}</span>
+                      </td>
+                      <td className="lb-td lb-td-date">
+                        <span className="lb-date">{formatDate(entry.achieved_at)}</span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>

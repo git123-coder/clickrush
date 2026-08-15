@@ -162,34 +162,36 @@ export default function ProfilePage({ username, onBack }: Props) {
           </div>
         ) : (
           <>
-            <table
-              className="lb-table prof-history-table"
-              role="table"
-              aria-label="Game history"
-            >
-              <thead>
-                <tr>
-                  <th className="lb-th">#</th>
-                  <th className="lb-th">Clicks</th>
-                  <th className="lb-th" style={{ textAlign: 'right' }}>Date &amp; Time</th>
-                </tr>
-              </thead>
-              <tbody>
-                {games.map((game, i) => (
-                  <tr key={game.game_id} className="lb-row">
-                    <td className="lb-td" style={{ color: 'var(--clr-muted)', fontSize: '0.8rem' }}>
-                      {i + 1}
-                    </td>
-                    <td className="lb-td">
-                      <span className="lb-clicks">{game.clicks.toLocaleString()}</span>
-                    </td>
-                    <td className="lb-td lb-td-date">
-                      <span className="lb-date">{formatDateTime(game.finished_at)}</span>
-                    </td>
+            <div className="table-container">
+              <table
+                className="lb-table prof-history-table"
+                role="table"
+                aria-label="Game history"
+              >
+                <thead>
+                  <tr>
+                    <th className="lb-th">#</th>
+                    <th className="lb-th">Clicks</th>
+                    <th className="lb-th" style={{ textAlign: 'right' }}>Date &amp; Time</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {games.map((game, i) => (
+                    <tr key={game.game_id} className="lb-row">
+                      <td className="lb-td" style={{ color: 'var(--clr-muted)', fontSize: '0.8rem' }}>
+                        {i + 1}
+                      </td>
+                      <td className="lb-td">
+                        <span className="lb-clicks">{game.clicks.toLocaleString()}</span>
+                      </td>
+                      <td className="lb-td lb-td-date">
+                        <span className="lb-date">{formatDateTime(game.finished_at)}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
             {/* Load more */}
             {hasMore && (

@@ -40,7 +40,6 @@ export default function GamePage({ username }: Props) {
   const [gameState, setGameState] = useState<GameState>('idle');
   const [clicks, setClicks] = useState(0);
   const [secondsLeft, setSecondsLeft] = useState(60);
-  const [session, setSession] = useState<StartGameResponse | null>(null);
   const [result, setResult] = useState<FinishGameResponse | null>(null);
   const [error, setError] = useState('');
 
@@ -94,7 +93,6 @@ export default function GamePage({ username }: Props) {
 
     try {
       const s = await api.startGame();
-      setSession(s);
       sessionRef.current = s;
       setSecondsLeft(s.duration_seconds);
       startTimer(s.expires_at);
