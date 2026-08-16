@@ -79,6 +79,8 @@ class GameSession(Base):
     __table_args__ = (
         # Fast lookup: "does this user have an active game?"
         Index("ix_game_sessions_user_status", "user_id", "status"),
+        # Prevent TOCTOU race: only one active session per user allowed
+        Index("uq_one_active_session_per_user", "user_id", unique=True, postgresql_where=text("status = 'active'")),
     )
 
     def __repr__(self) -> str:

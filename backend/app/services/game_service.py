@@ -36,6 +36,8 @@ from app.models.game_session import GAME_DURATION_SECONDS, GRACE_PERIOD_SECONDS,
 from app.models.score import MAX_CLICKS_PER_GAME, Score
 
 
+from sqlalchemy.exc import IntegrityError
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def is_session_truly_active(session: GameSession) -> bool:
@@ -120,7 +122,18 @@ def start_game(db: Session, user_id: uuid.UUID) -> GameSession:
         status=GameStatus.active,
     )
     db.add(session)
-    db.commit()
+    
+    try:
+        db.commit()
+    except IntegrityError as e:
+        db.rollback()
+        if "uq_one_active_session_per_user" in str(e):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="You already have an active game. Finish it before starting a new one.",
+            )
+        raise e
+        
     db.refresh(session)
     return session
 

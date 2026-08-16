@@ -54,4 +54,5 @@ def downgrade() -> None:
     op.drop_index('ix_game_sessions_user_status', table_name='game_sessions')
     op.drop_index(op.f('ix_game_sessions_user_id'), table_name='game_sessions')
     op.drop_table('game_sessions')
+    op.execute("DROP TYPE IF EXISTS gamestatus CASCADE")
     # ### end Alembic commands ###

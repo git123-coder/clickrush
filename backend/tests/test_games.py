@@ -358,3 +358,82 @@ def test_finish_abandoned_active_session_returns_410(client, auth_headers, db_se
     db_session.refresh(session)
     assert session.status == GameStatus.expired
 
+
+# ── TOCTOU Concurrency Test ───────────────────────────────────────────────────
+
+def test_start_game_concurrency_race(engine):
+    """
+    Simulates a true TOCTOU race condition using two separate threads and DB sessions,
+    synchronized so both pass the application-level 'is there an active game' check 
+    before either commits. The database unique partial index must block the second one.
+    """
+    import threading
+    import uuid
+    from unittest.mock import patch
+    from sqlalchemy.orm import sessionmaker
+    from fastapi import HTTPException
+    from app.services.game_service import start_game, get_active_session
+    from app.models.user import User
+
+    SessionLocal = sessionmaker(bind=engine)
+    
+    # 1. Setup a real user in the DB outside the nested transaction fixture
+    setup_db = SessionLocal()
+    user = User(
+        username=f"racer_{uuid.uuid4().hex[:8]}", 
+        email=f"racer_{uuid.uuid4().hex[:8]}@clickrush.dev", 
+        password_hash="hash"
+    )
+    setup_db.add(user)
+    setup_db.commit()
+    user_id = user.id
+    setup_db.close()
+
+    barrier = threading.Barrier(2)
+    results = []
+
+    real_get_active_session = get_active_session
+
+    def synchronized_get_active_session(db, uid):
+        # Perform the actual check (will return None for both threads)
+        res = real_get_active_session(db, uid)
+        # Synchronize both threads right after the check, before they insert
+        barrier.wait(timeout=5)
+        return res
+
+    def racer():
+        db = SessionLocal()
+        try:
+            session = start_game(db, user_id)
+            results.append(session.id)
+        except HTTPException as e:
+            results.append(e.status_code)
+        except Exception as e:
+            results.append(e)
+        finally:
+            db.close()
+
+    with patch("app.services.game_service.get_active_session", side_effect=synchronized_get_active_session):
+        t1 = threading.Thread(target=racer)
+        t2 = threading.Thread(target=racer)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+    # 2. Verify results: exactly one 201 (UUID) and one 409
+    successes = [r for r in results if isinstance(r, uuid.UUID)]
+    conflicts = [r for r in results if r == 409]
+
+    # 3. Cleanup DB before asserting so we don't leave garbage if assert fails
+    cleanup_db = SessionLocal()
+    active_count = cleanup_db.query(GameSession).filter_by(user_id=user_id, status=GameStatus.active).count()
+    cleanup_db.query(GameSession).filter_by(user_id=user_id).delete()
+    cleanup_db.query(User).filter_by(id=user_id).delete()
+    cleanup_db.commit()
+    cleanup_db.close()
+
+    # Assertions
+    assert len(successes) == 1, f"Exactly one game should be created. Results: {results}"
+    assert len(conflicts) == 1, f"The other concurrent request should hit the DB unique constraint and return 409. Results: {results}"
+    assert active_count == 1, "Only one active session should exist in the database for the user."
