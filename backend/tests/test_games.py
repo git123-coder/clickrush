@@ -94,15 +94,44 @@ def test_game_timestamps(client, auth_headers):
     assert abs(actual_duration - expected_duration).total_seconds() < 2
 
 
-# ── 5. User cannot start another active game ──────────────────────────────────
+# ── 5. User can start a new game which abandons previous active ones ────────
 
-def test_cannot_start_duplicate_active_game(client, auth_headers):
+def test_repeated_new_game_behavior(client, auth_headers, db_session):
+    # Start Game 1
     r1 = start_game(client, auth_headers)
     assert r1.status_code == 201
+    g1_id = uuid.UUID(r1.json()["game_id"])
 
+    # Start Game 2
     r2 = start_game(client, auth_headers)
-    assert r2.status_code == 409
-    assert "active" in r2.json()["detail"].lower()
+    assert r2.status_code == 201
+    g2_id = uuid.UUID(r2.json()["game_id"])
+    assert g1_id != g2_id
+
+    # Start Game 3
+    r3 = start_game(client, auth_headers)
+    assert r3.status_code == 201
+    g3_id = uuid.UUID(r3.json()["game_id"])
+    assert g2_id != g3_id
+
+    # Verify state: 1 and 2 expired, 3 active
+    g1 = db_session.get(GameSession, g1_id)
+    g2 = db_session.get(GameSession, g2_id)
+    g3 = db_session.get(GameSession, g3_id)
+    
+    db_session.refresh(g1)
+    db_session.refresh(g2)
+    db_session.refresh(g3)
+
+    assert g1.status == GameStatus.expired
+    assert g2.status == GameStatus.expired
+    assert g3.status == GameStatus.active
+    
+    # Verify DB only has 1 active session for user
+    active_count = db_session.query(GameSession).filter_by(
+        user_id=g1.user_id, status=GameStatus.active
+    ).count()
+    assert active_count == 1
 
 
 # ── 6. Valid game can be finished ─────────────────────────────────────────────
@@ -230,9 +259,10 @@ def test_end_to_end_game_flow(client):
     assert start_resp.status_code == 201
     game_id = start_resp.json()["game_id"]
 
-    # Cannot start another while active
+    # Starting another abandons the previous and succeeds
     dup = client.post("/api/games/start", headers=headers)
-    assert dup.status_code == 409
+    assert dup.status_code == 201
+    game_id = dup.json()["game_id"]
 
     # Finish the game
     finish_resp = client.post(
@@ -285,76 +315,72 @@ def test_day1_protected_endpoint_still_works(client, auth_headers, registered_us
     assert "password_hash" not in data
 
 
-# ── Orphaned / abandoned session bug-fix regression tests ─────────────────────
+# ── Dangling Active Sessions bug-fix regression tests ──────────────────────────
 
 def test_abandoned_session_does_not_block_new_game(client, auth_headers, db_session):
-    """
-    Core bug regression: user starts a game, closes tab (session stays
-    status=active), returns and starts a new game.  The stale session must be
-    auto-expired and a 201 returned — not a permanent 409.
-    """
-    # Start a game
+    """Test 1: Existing active session is abandoned."""
     start_resp = start_game(client, auth_headers)
     assert start_resp.status_code == 201
     game_id = uuid.UUID(start_resp.json()["game_id"])
 
-    # Simulate "closed tab" by backdating the session past expires_at + grace
-    session = db_session.get(GameSession, game_id)
-    past = datetime.now(timezone.utc) - timedelta(
-        seconds=GAME_DURATION_SECONDS + GRACE_PERIOD_SECONDS + 5
-    )
-    session.started_at = past
-    session.expires_at = past + timedelta(seconds=GAME_DURATION_SECONDS)
-    # Leave status = active to reproduce the bug
-    db_session.commit()
-
-    # User logs back in and starts a new game — must succeed
+    # User starts a new game
     new_resp = start_game(client, auth_headers)
-    assert new_resp.status_code == 201, (
-        f"Expected 201 but got {new_resp.status_code}: {new_resp.json()}"
-    )
-    assert new_resp.json()["game_id"] != str(game_id)
+    assert new_resp.status_code == 201
+    new_game_id = uuid.UUID(new_resp.json()["game_id"])
+    assert game_id != new_game_id
 
     # The old session must have been flipped to expired
+    session = db_session.get(GameSession, game_id)
+    new_session = db_session.get(GameSession, new_game_id)
     db_session.refresh(session)
+    db_session.refresh(new_session)
+    
     assert session.status == GameStatus.expired
+    assert new_session.status == GameStatus.active
 
-
-def test_still_active_session_still_blocks_new_game(client, auth_headers):
+def test_still_active_session_still_abandoned(client, auth_headers, db_session):
     """
-    The fix must NOT allow starting a second game while one is genuinely
-    still running (status=active, expires_at still in the future).
+    Test 2: Active session that has not expired yet is abandoned.
     """
     r1 = start_game(client, auth_headers)
     assert r1.status_code == 201
+    g1_id = uuid.UUID(r1.json()["game_id"])
 
+    # Verify it is still far in the future
+    session = db_session.get(GameSession, g1_id)
+    assert session.expires_at > datetime.now(timezone.utc)
+
+    # Calling start again must immediately abandon it, not block
     r2 = start_game(client, auth_headers)
-    assert r2.status_code == 409
-    assert "active" in r2.json()["detail"].lower()
+    assert r2.status_code == 201
+    
+    db_session.refresh(session)
+    assert session.status == GameStatus.expired
 
-
-def test_finish_abandoned_active_session_returns_410(client, auth_headers, db_session):
+def test_abandoned_session_cannot_receive_score(client, auth_headers, db_session):
     """
-    Finishing a session that is status=active but past its expires_at+grace
-    must return 410 (expired), not 200 or 409. Verifies that finish_game()
-    also uses is_session_truly_active() correctly.
+    Test 3: Old session cannot receive a score.
     """
-    game_id = uuid.UUID(start_game(client, auth_headers).json()["game_id"])
+    r1 = start_game(client, auth_headers)
+    assert r1.status_code == 201
+    g1_id = uuid.UUID(r1.json()["game_id"])
 
-    # Backdate the session
-    session = db_session.get(GameSession, game_id)
-    past = datetime.now(timezone.utc) - timedelta(
-        seconds=GAME_DURATION_SECONDS + GRACE_PERIOD_SECONDS + 5
-    )
-    session.started_at = past
-    session.expires_at = past + timedelta(seconds=GAME_DURATION_SECONDS)
-    # Leave status = active
-    db_session.commit()
+    # Start new game abandons the first
+    start_game(client, auth_headers)
+    
+    session = db_session.get(GameSession, g1_id)
+    db_session.refresh(session)
+    assert session.status == GameStatus.expired
 
-    resp = finish_game(client, str(game_id), 30, auth_headers)
+    # Attempt to finish old session
+    resp = finish_game(client, str(g1_id), 30, auth_headers)
     assert resp.status_code == 410
-
-    # Session must now be marked expired in DB
+    
+    # Verify no score was saved
+    score = db_session.query(Score).filter_by(game_session_id=g1_id).first()
+    assert score is None
+    
+    # Remains expired
     db_session.refresh(session)
     assert session.status == GameStatus.expired
 
@@ -372,7 +398,7 @@ def test_start_game_concurrency_race(engine):
     from unittest.mock import patch
     from sqlalchemy.orm import sessionmaker
     from fastapi import HTTPException
-    from app.services.game_service import start_game, get_active_session
+    from app.services.game_service import start_game, _get_existing_active_session
     from app.models.user import User
 
     SessionLocal = sessionmaker(bind=engine)
@@ -392,11 +418,11 @@ def test_start_game_concurrency_race(engine):
     barrier = threading.Barrier(2)
     results = []
 
-    real_get_active_session = get_active_session
+    real_get_existing_active = _get_existing_active_session
 
-    def synchronized_get_active_session(db, uid):
+    def synchronized_get_existing_active(db, uid):
         # Perform the actual check (will return None for both threads)
-        res = real_get_active_session(db, uid)
+        res = real_get_existing_active(db, uid)
         # Synchronize both threads right after the check, before they insert
         barrier.wait(timeout=5)
         return res
@@ -413,7 +439,7 @@ def test_start_game_concurrency_race(engine):
         finally:
             db.close()
 
-    with patch("app.services.game_service.get_active_session", side_effect=synchronized_get_active_session):
+    with patch("app.services.game_service._get_existing_active_session", side_effect=synchronized_get_existing_active):
         t1 = threading.Thread(target=racer)
         t2 = threading.Thread(target=racer)
         t1.start()

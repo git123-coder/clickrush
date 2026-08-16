@@ -67,52 +67,28 @@ def _expire_stale_session(db: Session, session: GameSession) -> None:
 
 # ── Start ─────────────────────────────────────────────────────────────────────
 
-def get_active_session(db: Session, user_id: uuid.UUID) -> GameSession | None:
-    """
-    Return the user's currently active GameSession only if it is still within
-    its time window, or None.
-
-    If a session is found with status=active but its expires_at has passed,
-    it is treated as abandoned: it is immediately marked expired so it no
-    longer blocks new games. This handles the logout-mid-game / closed-tab
-    scenario without any background job.
-    """
-    candidate = db.scalar(
+def _get_existing_active_session(db: Session, user_id: uuid.UUID) -> GameSession | None:
+    return db.scalar(
         select(GameSession).where(
             GameSession.user_id == user_id,
             GameSession.status == GameStatus.active,
         )
     )
 
-    if candidate is None:
-        return None
-
-    if is_session_truly_active(candidate):
-        # Session is genuinely still running — block a new start.
-        return candidate
-
-    # Session is status=active but its time window has passed → abandoned.
-    # Auto-expire it so the user can start a new game.
-    _expire_stale_session(db, candidate)
-    return None
-
-
 def start_game(db: Session, user_id: uuid.UUID) -> GameSession:
     """
     Create a new game session for the user.
 
-    Rejects the request only if the user has an active session that is still
-    within its valid time window. Stale active sessions (past expires_at) are
-    automatically marked expired before creating the new one.
-
+    If the user already has an active session, it is immediately marked as expired
+    so it no longer blocks the new game. This resolves the dangling session issue
+    if a user abandons a game or logs out mid-game.
+    
     Timestamps are set from the server clock — never from client input.
     """
-    existing = get_active_session(db, user_id)
+    existing = _get_existing_active_session(db, user_id)
     if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="You already have an active game. Finish it before starting a new one.",
-        )
+        existing.status = GameStatus.expired
+        db.flush()
 
     now = datetime.now(timezone.utc)
     session = GameSession(
