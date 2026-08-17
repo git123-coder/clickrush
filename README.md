@@ -135,3 +135,8 @@ Once the backend is running locally, the interactive Swagger/OpenAPI documentati
 Live URL: https://clickrush-pi.vercel.app/
 
 > **Note:** The backend may take 30–60 seconds to respond on the first request after a period of inactivity due to cold starts. Subsequent requests will be fast.
+
+---
+
+## Demo Video
+https://www.loom.com/share/6e1aaac9e2f7408dbaf2ae6907ef4750
