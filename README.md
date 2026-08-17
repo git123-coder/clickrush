@@ -127,3 +127,11 @@ Stores the final validated score of a completed game session.
 
 Once the backend is running locally, the interactive Swagger/OpenAPI documentation is available at:
 `http://127.0.0.1:8000/docs`
+
+---
+
+## Deployed Application
+
+Live URL: https://clickrush-pi.vercel.app/
+
+> **Note:** The backend may take 30–60 seconds to respond on the first request after a period of inactivity due to cold starts. Subsequent requests will be fast.
