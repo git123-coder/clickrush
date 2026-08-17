@@ -44,6 +44,7 @@ Ensure the `.env` file contains the required variables:
 ### 3. Backend setup
 Open a new terminal to set up and run the backend:
 ```bash
+# Create the local PostgreSQL database
 createdb clickrush
 
 cd backend
@@ -54,8 +55,10 @@ source .venv/bin/activate
 
 pip install -r requirements.txt
 
+# Apply database migrations
 alembic upgrade head
 
+# Start the backend
 uvicorn app.main:app --reload
 ```
 The FastAPI backend will run on `http://127.0.0.1:8000`.
